@@ -1,5 +1,6 @@
 package com.home.example.pgEnum.util;
 
+import com.home.example.pgEnum.configuration.TestConfig;
 import io.zonky.test.db.postgres.embedded.ConnectionInfo;
 import io.zonky.test.db.postgres.embedded.PreparedDbProvider;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -8,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockitoTestExecutionListener;
 import org.springframework.boot.test.mock.mockito.ResetMocksTestExecutionListener;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestExecutionListeners;
 import org.springframework.test.context.event.ApplicationEventsTestExecutionListener;
@@ -28,6 +30,7 @@ import java.sql.SQLException;
 })
 @SpringBootTest
 @ComponentScan("com.home.data.processing.examples")
+@Import({TestConfig.class})
 public class WithDataBase {
 
     @Autowired

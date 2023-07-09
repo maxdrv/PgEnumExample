@@ -1,9 +1,14 @@
-package com.home.example.pgEnum.core.model;
+package com.home.example.pgEnum.core.model.jdbc;
 
+import com.home.example.pgEnum.core.model.Sortable;
+import com.home.example.pgEnum.core.model.SortableMapper;
+import com.home.example.pgEnum.core.model.SortableStatus;
 import com.home.example.pgEnum.util.WithDataBase;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -210,9 +215,9 @@ public class PgEnumTest extends WithDataBase {
      * В базу данных PG поступает character varying, который автоматически не кастится в enum
      * <p>
      * Как починить описано тут:
-     * @see
-     * <a href="https://stackoverflow.com/questions/851758/java-enums-jpa-and-postgres-enums-how-do-i-make-them-work-together">
-     *     https://stackoverflow.com
+     *
+     * @see <a href="https://stackoverflow.com/questions/851758/java-enums-jpa-and-postgres-enums-how-do-i-make-them-work-together">
+     * https://stackoverflow.com
      * </a>
      */
     @Test
@@ -243,11 +248,10 @@ public class PgEnumTest extends WithDataBase {
     }
 
     /**
-     *
      * Применение настроек соединения, как описано тут:
-     * @see
-     * <a href="https://stackoverflow.com/questions/851758/java-enums-jpa-and-postgres-enums-how-do-i-make-them-work-together">
-     *     https://stackoverflow.com
+     *
+     * @see <a href="https://stackoverflow.com/questions/851758/java-enums-jpa-and-postgres-enums-how-do-i-make-them-work-together">
+     * https://stackoverflow.com
      * </a>
      * Что произойдет?
      * Добавляем к строке соединения параметр: stringtype=unspecified
@@ -255,7 +259,7 @@ public class PgEnumTest extends WithDataBase {
      * не воспринимаются PG как varchar, они отправляются, как untyped значения,
      * PG попытается самостоятельно определить тип
      * <a href="https://jdbc.postgresql.org/documentation/use/">
-     *     https://jdbc.postgresql.org
+     * https://jdbc.postgresql.org
      * </a>
      */
     @Test
@@ -275,15 +279,14 @@ public class PgEnumTest extends WithDataBase {
 
     /**
      * Заводим каст в PG, как описано тут:
-     * @see
-     * <a href="https://stackoverflow.com/questions/851758/java-enums-jpa-and-postgres-enums-how-do-i-make-them-work-together">
-     *     https://stackoverflow.com
+     *
+     * @see <a href="https://stackoverflow.com/questions/851758/java-enums-jpa-and-postgres-enums-how-do-i-make-them-work-together">
+     * https://stackoverflow.com
      * </a>
      * Что произойдет?
      * Сами создаетм каст из varchar в подходящий enum, и там где мы выполняем вставку в колонку с типом enum
      * появится автоматичесое приведение varchar в enum
      * <a href="https://www.postgresql.org/docs/current/sql-createcast.html">https://www.postgresql.org</a>
-     *
      */
     @Test
     void fixPgEnumCastWithImplicitCastCreation() {
@@ -298,6 +301,102 @@ public class PgEnumTest extends WithDataBase {
         List<Sortable> res = jdbcTemplate.query("select * from sortable", SortableMapper::toSortable);
 
         assertThat(res).extracting(Sortable::status).containsExactly(SortableStatus.SHIPPED_DIRECT);
+    }
+
+    @Test
+    void whereClauseWithLiteralIsOk() {
+        jdbcTemplate.update("insert into sortable(status) values ('SORTED_DIRECT')");
+        jdbcTemplate.update("insert into sortable(status) values ('SHIPPED_DIRECT')");
+
+        List<Sortable> res = jdbcTemplate.query(
+                "select * from sortable where status = 'SHIPPED_DIRECT' order by status asc", SortableMapper::toSortable
+        );
+
+        assertThat(res)
+                .extracting(Sortable::status)
+                .containsExactly(SortableStatus.SHIPPED_DIRECT);
+    }
+
+    @Test
+    void whereClauseWithParameterIsNotWorking() {
+        BadSqlGrammarException exception = Assertions.assertThrows(
+                BadSqlGrammarException.class,
+                () -> jdbcTemplate.query(
+                        "select * from sortable where status = ? order by status asc",
+                        SortableMapper::toSortable,
+                        SortableStatus.SHIPPED_DIRECT.name()
+                )
+        );
+        assertThat(exception.getMessage())
+                .contains("bad SQL grammar [select * from sortable where status = ? order by status asc]");
+
+        assertThat( exception.getCause().getMessage())
+                .contains("ERROR: operator does not exist: sortable_status = character varying");
+    }
+
+    @Test
+    void whereClauseWithParameterAndExplicitTypeCastIsOk() {
+        jdbcTemplate.update("insert into sortable(status) values ('SORTED_DIRECT')");
+        jdbcTemplate.update("insert into sortable(status) values ('SHIPPED_DIRECT')");
+
+        List<Sortable> res = jdbcTemplate.query(
+                "select * from sortable where status = ?::sortable_status order by status asc",
+                SortableMapper::toSortable,
+                SortableStatus.SHIPPED_DIRECT.name()
+        );
+
+        assertThat(res)
+                .extracting(Sortable::status)
+                .containsExactly(SortableStatus.SHIPPED_DIRECT);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "status = ?", "status < ?", " status <= ?", "status > ?", "status >= ?",
+            "? = status", "? < status", "? <= status", "? > status", "? >= status"
+    })
+    void whereClauseWithParameterAndImplicitTypeCastIsNotWorking(String operation) {
+        jdbcTemplate.update("CREATE CAST (CHARACTER VARYING as sortable_type) WITH INOUT AS IMPLICIT");
+        jdbcTemplate.update("CREATE CAST (CHARACTER VARYING as sortable_status) WITH INOUT AS IMPLICIT");
+
+        String sql = String.format("select * from sortable where %s order by status asc", operation);
+
+        BadSqlGrammarException exception = Assertions.assertThrows(
+                BadSqlGrammarException.class,
+                () -> jdbcTemplate.query(
+                        sql,
+                        SortableMapper::toSortable,
+                        SortableStatus.SHIPPED_DIRECT.name()
+                )
+        );
+
+        assertThat(exception.getMessage())
+                .contains(sql);
+
+        assertThat(exception.getCause().getMessage())
+                .containsAnyOf(
+                        "ERROR: operator does not exist: sortable_status",
+                        "ERROR: operator does not exist: character varying"
+                );
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "status = ?", "status < ?", " status <= ?", "status > ?", "status >= ?",
+            "? = status", "? < status", "? <= status", "? > status", "? >= status"
+    })
+    void whereClauseFixPgEnumCastWithConnectionParameter(String operation) throws SQLException {
+        DataSource ds = preparedDbProvider.createDataSourceFromConnectionInfo(connectionInfoCustom);
+        JdbcTemplate jdbcTemplateCustom = new JdbcTemplate(ds);
+
+        jdbcTemplateCustom.update("insert into sortable(status) values ('SORTED_DIRECT')");
+        jdbcTemplateCustom.update("insert into sortable(status) values ('SHIPPED_DIRECT')");
+
+        jdbcTemplateCustom.query(
+                String.format("select * from sortable where %s order by status asc", operation),
+                SortableMapper::toSortable,
+                SortableStatus.SHIPPED_DIRECT.name()
+        );
     }
 
 }
